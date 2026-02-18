@@ -1,66 +1,113 @@
+<#
+.SYNOPSIS
+    Enables an Active Directory user account.
+
+.DESCRIPTION
+    This runbook enables a disabled Active Directory user account by username.
+    It requires stored credentials in Azure Automation for the domain controller.
+    It requires the ActiveDirectory PowerShell module, which is installed automatically if not present.
+    It requires Environment Variables to be set for the domain, domain controller, and credentials.
+
+.PARAMETER Username
+    The username of the Active Directory account to enable.
+    This parameter accepts a string value and cannot be empty.
+
+.EXAMPLE
+    .\Enable-User.ps1 -Username "john"
+
+.NOTES
+    Author: Mjølner Informatics AS
+    Requires: ActiveDirectory module
+    Requires: Azure Automation stored credentials
+    Requires: Powershell 7+
+#>
+
 param (
-  [Parameter(Mandatory=$true)]
-	[string] $username
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]
+    $Username
 )
 
-# Use the following verbose setting to enable verbose output
-#$VerbosePreference = "Continue"
-$PSStyle.OutputRendering = 'PlainText'
+# Set error handling
+$ErrorActionPreference = 'Stop'
+$VerbosePreference = 'Continue'
 
-# * Environment variabels * #
-# Set the below to match your environment #
-$domain = "" #Name of the domain to add the user to
-$domainController = "" #IP or FQDN of Domain Controller
-$credentialsName = "" #Name of stored credentials to use for authentication with Domain Controller
-
-### Script ###
-try 
-{
-  $metadata = @{
-    startTime = Get-Date
-    username = $username
-    domain = $domain
-  }
-  
-  Write-Verbose "Runbook started - $($metadata.startTime)"
-  
-  if (Get-Module -ListAvailable -Name "ActiveDirectory") 
-  {
-    Write-Verbose "Found ActiveDirectory module"
-  } 
-  else 
-  {
-    Write-Verbose "Did not find Active Directory module. Trying to install the RSAT-AD-PowerShell Windows Feature"
-    Install-WindowsFeature RSAT-AD-PowerShell
-  }
-
-  $credentials = Get-AutomationPSCredential -Name $credentialsName
-  $userPrincipalName = $username + "@" + $domain
-
-  $user = Get-ADUser -Filter "UserPrincipalName -eq '$userPrincipalName'" -ErrorAction SilentlyContinue
-  if([String]::IsNullOrEmpty($user)) 
-  {
-      throw "User '$($UserPrincipalName)' not found"
-  }
-  
-  $user = Enable-ADAccount -Credential $credentials -Identity $user -Server $domainController -PassThru
-} 
-catch 
-{  
-  $errorMessage = "Exception caught at line $($_.InvocationInfo.ScriptLineNumber), $($_.Exception.Message)"
-} 
-finally 
-{
-  if([String]::IsNullOrEmpty($errorMessage))
-  {
-    Write-Verbose "Runbook has completed. Total runtime $((([DateTime]::Now) - $($metadata.startTime)).TotalSeconds) Seconds"
-    # Uncomment next line if metadata output is required
-    #Write-Output $metadata | ConvertTo-Json -WarningAction SilentlyContinue
-    Write-Output $user | Select-Object Enabled,SamAccountName,UserPrincipalName | ConvertTo-Json -WarningAction SilentlyContinue
-  }
-  else 
-  {
-    Write-Output $errorMessage
-    throw
-  }
+# Set output rendering to plain text if PSStyle is available (PS 7.2+)
+if ($PSVersionTable.PSVersion.Minor -ge 2) {
+    $PSStyle.OutputRendering = 'PlainText'
 }
+
+#region Variables
+# Set variables in Azure Automation for the below values to match your environment
+$Domain = Get-AutomationVariable -Name "DomainName"                   # Name of the domain to add the user to Example: "mydomain.local"
+$DomainController = Get-AutomationVariable -Name "DomainController"   # IP or FQDN of Domain Controller
+$Credentials = Get-AutomationPSCredential -Name "DomainCredentials"   # Name of stored credentials to use for authentication with Domain Controller
+#endregion
+
+#region Main Script
+try {
+    # Initialize metadata
+    $Metadata = @{
+        StartTime = Get-Date
+        Username  = $Username
+        Domain    = $Domain
+    }
+    
+    Write-Verbose "Runbook started - $($Metadata.StartTime)"
+    
+    # Verify ActiveDirectory module availability
+    if (-not (Get-Module -ListAvailable -Name "ActiveDirectory")) {
+        Write-Verbose "ActiveDirectory module not found. Installing RSAT-AD-PowerShell..."
+        Install-WindowsFeature -Name RSAT-AD-PowerShell -WarningAction SilentlyContinue | Out-Null
+    }
+    else {
+        Write-Verbose "ActiveDirectory module found"
+    }
+    
+    # Build user principal name
+    $UserPrincipalName = "$Username@$Domain"
+    
+    # Retrieve user account
+    $GetADUserParams = @{
+        Filter      = "UserPrincipalName -eq '$UserPrincipalName'"
+        Server      = $DomainController
+        Credential  = $Credentials
+        ErrorAction = 'SilentlyContinue'
+    }
+    $User = Get-ADUser @GetADUserParams
+    
+    if (-not $User) {
+        throw "User '$UserPrincipalName' not found in Active Directory"
+    }
+    
+    # Enable the user account
+    $EnableADAccountParams = @{
+        Identity   = $User
+        Server     = $DomainController
+        Credential = $Credentials
+        PassThru   = $true
+    }
+    $User = Enable-ADAccount @EnableADAccountParams
+    
+    Write-Verbose "User account enabled successfully"
+}
+catch {
+    $ErrorMessage = "Exception at line $($_.InvocationInfo.ScriptLineNumber): $($_.Exception.Message)"
+    Write-Error -Message $ErrorMessage -ErrorAction Continue
+    throw
+}
+finally {
+    # Calculate and output results
+    if ($User) {
+        $RuntimeSeconds = (([DateTime]::Now) - $Metadata.StartTime).TotalSeconds
+        Write-Verbose "Runbook completed successfully. Total runtime: $RuntimeSeconds seconds"
+        
+        # Output user details as JSON
+        $User | Select-Object -Property Enabled, SamAccountName, UserPrincipalName | ConvertTo-Json -WarningAction SilentlyContinue
+
+        # Uncomment next line if metadata output is required
+        # $Metadata | ConvertTo-Json -WarningAction SilentlyContinue
+    }
+}
+#endregion
