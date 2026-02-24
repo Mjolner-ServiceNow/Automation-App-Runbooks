@@ -126,6 +126,9 @@ finally {
         
         # Output group details as JSON
         $Group | Select-Object -Property Name, Description, DistinguishedName | ConvertTo-Json -WarningAction SilentlyContinue
+
+        # Uncomment next line if metadata output is required
+        # $Metadata | ConvertTo-Json -WarningAction SilentlyContinue
     }
 }
 #endregion
