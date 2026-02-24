@@ -99,10 +99,15 @@ catch {
 }
 finally {
     # Calculate and output results
-    $RuntimeSeconds = (([DateTime]::Now) - $Metadata.StartTime).TotalSeconds
-    Write-Verbose "Runbook completed successfully. Total runtime: $RuntimeSeconds seconds"
+    if ($User) {
+        $RuntimeSeconds = (([DateTime]::Now) - $Metadata.StartTime).TotalSeconds
+        Write-Verbose "Runbook completed successfully. Total runtime: $RuntimeSeconds seconds"
 
-    # Output metadata as JSON
-    $Metadata | ConvertTo-Json -WarningAction SilentlyContinue
+        # Output user details as JSON
+        $User | Select-Object -Property SamAccountName, UserPrincipalName | ConvertTo-Json -WarningAction SilentlyContinue
+
+        # Uncomment next line if metadata output is required
+        # $Metadata | ConvertTo-Json -WarningAction SilentlyContinue
+    }
 }
 #endregion

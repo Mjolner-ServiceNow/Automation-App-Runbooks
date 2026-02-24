@@ -131,6 +131,9 @@ finally {
             Group = ($Group | Select-Object -Property Name, DistinguishedName)
             User  = ($User | Select-Object -Property SamAccountName, UserPrincipalName)
         } | ConvertTo-Json -WarningAction SilentlyContinue
+
+        # Uncomment next line if metadata output is required
+        # $Metadata | ConvertTo-Json -WarningAction SilentlyContinue
     }
 }
 #endregion
