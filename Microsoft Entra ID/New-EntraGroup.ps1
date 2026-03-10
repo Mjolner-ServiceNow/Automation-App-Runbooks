@@ -47,8 +47,6 @@ $TenantID = Get-AutomationVariable -Name "TenantID"                   # Name of 
 $Credentials = Get-AutomationPSCredential -Name "AccountOperatorEntraID"   # Name of stored credentials to use for authentication with Microsoft Graph
 #endregion
 
-Write-Output $TenantID
-Write-Output $Credentials.UserName
 
 #region Main Script
 try {
@@ -97,7 +95,7 @@ try {
 
     # Connect to Microsoft Graph
     try { 
-        Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $Credentials -ContextScope CurrentUser -NoWelcome 
+        Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $Credentials -ContextScope Process -NoWelcome 
     }
     catch { 
         throw "Unable to connect to Microsoft Graph. Make sure the provided user credential has access to the tenant and the required permissions."
@@ -110,8 +108,10 @@ try {
         DisplayName     = $DisplayName
         Description     = $Description
         SecurityEnabled = $true
+        MailEnabled     = $false
+        MailNickname    = "notset"
     }
-    $Group = New-MgGroup @NewEntraGroup
+    $Group = New-MgGroup @NewEntraGroup -ErrorAction Stop
     
     Write-Verbose "Group created successfully"
 }
@@ -127,7 +127,7 @@ finally {
         Write-Verbose "Runbook completed successfully. Total runtime: $RuntimeSeconds seconds"
         
         # Output group details as JSON
-        $Group | ConvertTo-Json -WarningAction SilentlyContinue
+        $Group | Select-Object -Property DisplayName, Description | ConvertTo-Json -WarningAction SilentlyContinue
 
         # Uncomment next line if metadata output is required
         # $Metadata | ConvertTo-Json -WarningAction SilentlyContinue

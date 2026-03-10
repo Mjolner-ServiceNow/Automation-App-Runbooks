@@ -1,20 +1,20 @@
 <#
 .SYNOPSIS
-    Add an account to Microsoft Entra ID group.
+    Removes an account from a Microsoft Entra ID group.
 
 .DESCRIPTION
-    This runbook adds an account to a Microsoft Entra ID security group with the specified properties.
+    This runbook removes an account from a Microsoft Entra ID security group with the specified properties.
     It requires stored credentials in Azure Automation for the Microsoft Entra ID tenant.
     It requires the Microsoft Graph PowerShell modules for managing users and groups, which is installed automatically if not present.
     
 .PARAMETER UserName
-    The user name to add to the group.
+    The user name to remove from the group.
 
 .PARAMETER GroupName
-    The name of the group to add the user to.
+    The name of the group to remove the user from.
 
 .EXAMPLE
-    .\New-EntraGroup.ps1 -Name "Marketing" -Description "Marketing department group"
+    .\Remove-EntraGroupMember.ps1 -UserName "user@contoso.com" -GroupName "Marketing"
 
 .NOTES
     Author: Mjølner Informatics AS
@@ -24,10 +24,12 @@
 #>
 
 param (
-    [Parameter(Mandatory = $false)]
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
     [string]$UserName,
     
-    [Parameter(Mandatory = $false)]
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
     [string]$GroupName
     
 )
@@ -47,16 +49,15 @@ $TenantID = Get-AutomationVariable -Name "TenantID"                   # Name of 
 $Credentials = Get-AutomationPSCredential -Name "AccountOperatorEntraID"   # Name of stored credentials to use for authentication with Microsoft Graph
 #endregion
 
-Write-Output $TenantID
-Write-Output $Credentials.UserName
+Write-Verbose "Loaded Automation variables for Entra authentication"
 
 #region Main Script
 try {
     # Initialize metadata
     $Metadata = @{
         StartTime = Get-Date
-        Name      = $Name
-        Domain    = $Domain
+        UserName  = $UserName
+        GroupName = $GroupName
     }
     
     Write-Verbose "Runbook started - $($Metadata.StartTime)"
@@ -97,7 +98,7 @@ try {
 
     # Connect to Microsoft Graph
     try { 
-        Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $Credentials -ContextScope CurrentUser -NoWelcome 
+        Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $Credentials -ContextScope Process -NoWelcome 
     }
     catch { 
         throw "Unable to connect to Microsoft Graph. Make sure the provided user credential has access to the tenant and the required permissions."
@@ -107,14 +108,24 @@ try {
 
     # Get the user
     $User = Get-MgUser -Filter "userPrincipalName eq '$UserName'"
+    if ($null -eq $User) {
+        throw "User '$UserName' not found in Entra ID"
+    }
 
     # Get the group
     $Group = Get-MgGroup -Filter "displayName eq '$GroupName'"
+    if ($null -eq $Group) {
+        throw "Group '$GroupName' not found in Entra ID"
+    }
+
+    if ($Group -is [System.Array]) {
+        throw "Multiple groups found with displayName '$GroupName'. Use a unique group name."
+    }
 
 
 
     # Remove User from Group
-    Remove-MgGroupMember -GroupId $Group.Id -UserId $User.Id
+    Remove-MgGroupMemberByRef -GroupId $Group.Id -DirectoryObjectId $User.Id
 
     Write-Verbose "User removed from Group"
 }
@@ -129,8 +140,8 @@ finally {
         $RuntimeSeconds = (([DateTime]::Now) - $Metadata.StartTime).TotalSeconds
         Write-Verbose "Runbook completed successfully. Total runtime: $RuntimeSeconds seconds"
         
-        # Output group details as JSON
-        $User | ConvertTo-Json -WarningAction SilentlyContinue
+        # Output user details as JSON
+        $User | Select-Object -Property DisplayName, UserPrincipalName | ConvertTo-Json -WarningAction SilentlyContinue
 
         # Uncomment next line if metadata output is required
         # $Metadata | ConvertTo-Json -WarningAction SilentlyContinue

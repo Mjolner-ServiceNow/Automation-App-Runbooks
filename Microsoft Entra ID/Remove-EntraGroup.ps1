@@ -1,17 +1,17 @@
 <#
 .SYNOPSIS
-    Creates a new Microsoft Entra ID group.
+    Removes a Microsoft Entra ID group.
 
 .DESCRIPTION
-    This runbook creates a new Microsoft Entra ID security group with the specified properties.
+    This runbook removes a Microsoft Entra ID security group.
     It requires stored credentials in Azure Automation for the Microsoft Entra ID tenant.
     It requires the Microsoft Graph PowerShell modules for managing users and groups, which is installed automatically if not present.
 
 .PARAMETER DisplayName
-    The display name for the group. 
+    The display name for the group.
 
 .EXAMPLE
-    .\New-EntraGroup.ps1 -Name "Marketing" -Description "Marketing department group"
+    .\Remove-EntraGroup.ps1 -GroupName "Marketing"
 
 .NOTES
     Author: Mjølner Informatics AS
@@ -21,7 +21,8 @@
 #>
 
 param (
-    [Parameter(Mandatory = $false)]
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
     [string]$GroupName
     
 )
@@ -41,16 +42,14 @@ $TenantID = Get-AutomationVariable -Name "TenantID"                   # Name of 
 $Credentials = Get-AutomationPSCredential -Name "AccountOperatorEntraID"   # Name of stored credentials to use for authentication with Microsoft Graph
 #endregion
 
-Write-Output $TenantID
-Write-Output $Credentials.UserName
+Write-Verbose "Loaded Automation variables for Entra authentication"
 
 #region Main Script
 try {
     # Initialize metadata
     $Metadata = @{
         StartTime = Get-Date
-        Name      = $Name
-        Domain    = $Domain
+        GroupName = $GroupName
     }
     
     Write-Verbose "Runbook started - $($Metadata.StartTime)"
@@ -91,7 +90,7 @@ try {
 
     # Connect to Microsoft Graph
     try { 
-        Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $Credentials -ContextScope CurrentUser -NoWelcome 
+        Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $Credentials -ContextScope Process -NoWelcome 
     }
     catch { 
         throw "Unable to connect to Microsoft Graph. Make sure the provided user credential has access to the tenant and the required permissions."
@@ -101,6 +100,13 @@ try {
 
     # Get the group
     $Group = Get-MgGroup -Filter "displayName eq '$GroupName'"
+    if ($null -eq $Group) {
+        throw "Group '$GroupName' not found in Entra ID"
+    }
+
+    if ($Group -is [System.Array]) {
+        throw "Multiple groups found with displayName '$GroupName'. Use a unique group name."
+    }
     
     # Remove the group
     Remove-MgGroup -GroupId $Group.Id
@@ -119,7 +125,7 @@ finally {
         Write-Verbose "Runbook completed successfully. Total runtime: $RuntimeSeconds seconds"
         
         # Output group details as JSON
-        $Group | ConvertTo-Json -WarningAction SilentlyContinue
+        $Group | Select-Object -Property DisplayName | ConvertTo-Json -WarningAction SilentlyContinue
 
         # Uncomment next line if metadata output is required
         # $Metadata | ConvertTo-Json -WarningAction SilentlyContinue
