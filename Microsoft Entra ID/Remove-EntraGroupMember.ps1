@@ -7,14 +7,14 @@
     It requires stored credentials in Azure Automation for the Microsoft Entra ID tenant.
     It requires the Microsoft Graph PowerShell modules for managing users and groups, which is installed automatically if not present.
     
-.PARAMETER UserName
-    The user name to remove from the group.
+.PARAMETER UserPrincipalName
+    The user principal name (UPN) of the account to remove from the group.
 
 .PARAMETER GroupName
     The name of the group to remove the user from.
 
 .EXAMPLE
-    .\Remove-EntraGroupMember.ps1 -UserName "user@contoso.com" -GroupName "Marketing"
+    .\Remove-EntraGroupMember.ps1 -UserPrincipalName "user@contoso.com" -GroupName "Marketing"
 
 .NOTES
     Author: Mjølner Informatics AS
@@ -26,7 +26,7 @@
 param (
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
-    [string]$UserName,
+    [string]$UserPrincipalName,
     
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
@@ -56,7 +56,7 @@ try {
     # Initialize metadata
     $Metadata = @{
         StartTime = Get-Date
-        UserName  = $UserName
+        UserPrincipalName  = $UserPrincipalName
         GroupName = $GroupName
     }
     
@@ -107,9 +107,9 @@ try {
 
 
     # Get the user
-    $User = Get-MgUser -Filter "userPrincipalName eq '$UserName'"
+    $User = Get-MgUser -Filter "userPrincipalName eq '$UserPrincipalName'"
     if ($null -eq $User) {
-        throw "User '$UserName' not found in Entra ID"
+        throw "User '$UserPrincipalName' not found in Entra ID"
     }
 
     # Get the group
