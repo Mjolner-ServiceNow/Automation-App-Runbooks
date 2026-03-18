@@ -7,6 +7,9 @@
     It requires stored credentials in Azure Automation for the Azure tenant.
     It requires the Az.Compute PowerShell module, which is installed automatically if not present.
 
+.PARAMETER SubscriptionId
+    The subscription ID to use for the Azure virtual machine.
+
 .PARAMETER VMName
     The name of the virtual machine to start.
 
@@ -14,7 +17,7 @@
     The name of the resource group containing the virtual machine.
 
 .EXAMPLE
-    .\Start-VM.ps1 -VMName "MyVM" -ResourceGroupName "MyResourceGroup"
+    .\Start-VM.ps1 -SubscriptionId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -VMName "MyVM" -ResourceGroupName "MyResourceGroup"
 
 .NOTES
     Author: Mjølner Informatics AS
@@ -24,6 +27,10 @@
 #>
 
 param (
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$SubscriptionId,
+
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$VMName,
@@ -43,10 +50,10 @@ if ($PSVersionTable.PSVersion.Minor -ge 2) {
 }
 
 #region Variables
-# Set variables in Azure Automation for the below values to match your environment
-$TenantID = Get-AutomationVariable -Name "TenantID"                     # Tenant ID for the Azure tenant
-$SubscriptionID = Get-AutomationVariable -Name "SubscriptionID"         # Subscription ID to target
-$Credentials = Get-AutomationPSCredential -Name "AccountOperatorAzure"  # Name of stored credentials to use for authentication with Azure
+# Set variables in Azure Automation if required for your environment. The below variables are examples and may not be required depending on your authentication method.
+#$TenantID = Get-AutomationVariable -Name "TenantID"                     # Tenant ID for the Azure tenant
+#$SubscriptionID = Get-AutomationVariable -Name "SubscriptionID"         # Subscription ID to target
+#$Credentials = Get-AutomationPSCredential -Name "AccountOperatorAzure"  # Name of stored credentials to use for authentication with Azure
 #endregion
 
 Write-Verbose "Loaded Automation variables for Azure authentication"
@@ -86,13 +93,13 @@ try {
     }
 
     # Get Credential Object from Automation Account
-    if ($null -eq $Credentials) {
-        throw "Azure Credentials not provided in Automation Account. No Azure connection will be available"
-    }
+    #if ($null -eq $Credentials) {
+    #    throw "Azure Credentials not provided in Automation Account. No Azure connection will be available"
+    #}
 
     # Connect to Azure
     try {
-        Connect-AzAccount -ServicePrincipal -TenantId $TenantId -Credential $Credentials -ContextScope Process | Out-Null
+        Connect-AzAccount -Identity | Out-Null
         Set-AzContext -SubscriptionId $SubscriptionId | Out-Null
     }
     catch {

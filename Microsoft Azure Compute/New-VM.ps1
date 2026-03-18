@@ -7,6 +7,9 @@
     It requires stored credentials in Azure Automation for the Azure tenant.
     It requires the Az.Compute and Az.Network PowerShell modules, which are installed automatically if not present.
 
+.PARAMETER SubscriptionId
+    The subscription ID to use for the Azure virtual machine.
+
 .PARAMETER VMName
     The name of the virtual machine to create.
 
@@ -23,7 +26,7 @@
     The Azure region to deploy the virtual machine to. Example: "eastus"
 
 .PARAMETER VMSize
-    The size of the virtual machine. Example: "Standard_DS3_v2"
+    The size of the virtual machine. Example: "Standard_D2s_v6"
 
 .PARAMETER NICName
     The name of the network interface card to create for the virtual machine.
@@ -32,7 +35,7 @@
     The resource ID of the subnet to attach the network interface to.
 
 .EXAMPLE
-    .\New-VM.ps1 -VMName "MyVM" -ResourceGroupName "MyResourceGroup" -VMLocalAdminUser "adminuser" -VMLocalAdminPassword "P@ssw0rd!" -LocationName "eastus" -VMSize "Standard_DS3_v2" -NICName "MyNIC" -SubnetID "/subscriptions/.../subnets/default"
+    .\New-VM.ps1 -VMName "MyVM" -ResourceGroupName "MyResourceGroup" -VMLocalAdminUser "adminuser" -VMLocalAdminPassword "P@ssw0rd!" -LocationName "swedencentral" -VMSize "Standard_DS3_v2" -NICName "MyNIC" -SubnetID "/subscriptions/.../subnets/default"
 
 .NOTES
     Author: Mjølner Informatics AS
@@ -42,6 +45,10 @@
 #>
 
 param (
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$SubscriptionId,
+
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$VMName,
@@ -60,11 +67,11 @@ param (
 
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
-    [string]$LocationName = "eastus",
+    [string]$LocationName = "westeurope",
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$VMSize = "Standard_DS3_v2",
+    [string]$VMSize = "Standard_D2s_v6",
 
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
@@ -86,9 +93,8 @@ if ($PSVersionTable.PSVersion.Minor -ge 2) {
 
 #region Variables
 # Set variables in Azure Automation for the below values to match your environment
-$TenantID = Get-AutomationVariable -Name "TenantID"                     # Tenant ID for the Azure tenant
-$SubscriptionID = Get-AutomationVariable -Name "SubscriptionID"         # Subscription ID to target
-$Credentials = Get-AutomationPSCredential -Name "AccountOperatorAzure"  # Name of stored credentials to use for authentication with Azure
+#$Credentials = Get-AutomationPSCredential -Name "AccountOperatorAzure"  # Name of stored credentials to use for authentication with Azure
+### The managed identity for the Automation Account can also be used for authentication, but requires additional setup and permissions in Azure. Uncomment the next line and comment out the Get-AutomationPSCredential line if you want to use managed identity authentication instead.
 #endregion
 
 Write-Verbose "Loaded Automation variables for Azure authentication"
@@ -121,6 +127,11 @@ try {
             Type        = "PowershellModule"
             FeatureName = $null
         }
+        @{
+            Name        = "Az.Resources"
+            Type        = "PowershellModule"
+            FeatureName = $null
+        }
     )
     foreach ($Module in $PowershellModules) {
         if (-not (Get-Module -ListAvailable -Name $Module.Name)) {
@@ -133,13 +144,16 @@ try {
     }
 
     # Get Credential Object from Automation Account
-    if ($null -eq $Credentials) {
-        throw "Azure Credentials not provided in Automation Account. No Azure connection will be available"
-    }
+    # Comment out if using managed identity authentication instead
+    #if ($null -eq $Credentials) {
+    #    throw "Azure Credentials not provided in Automation Account. No Azure connection will be available"
+    #}
 
     # Connect to Azure
     try {
-        Connect-AzAccount -ServicePrincipal -TenantId $TenantId -Credential $Credentials -ContextScope Process | Out-Null
+        # This example uses service principal authentication with stored credentials. If using managed identity authentication, the Connect-AzAccount -Identity command above will handle authentication and context setup, so this block can be skipped.
+        #Connect-AzAccount -ServicePrincipal -TenantId $TenantId -Credential $Credentials -ContextScope Process | Out-Null
+        Connect-AzAccount -Identity | Out-Null
         Set-AzContext -SubscriptionId $SubscriptionId | Out-Null
     }
     catch {
@@ -147,21 +161,57 @@ try {
     }
     #endregion
 
-    # Build network interface
-    $NIC = New-AzNetworkInterface -Name $NICName -ResourceGroupName $ResourceGroupName -Location $LocationName -SubnetId $SubnetID
+    # Does Resource Group exist?
+    if (-not (Get-AzResourceGroup -Name $ResourceGroupName -ErrorAction SilentlyContinue)) {
+        Write-Verbose "Resource group $ResourceGroupName does not exist. Creating..."
+        New-AzResourceGroup -Name $ResourceGroupName -Location $LocationName | Out-Null
+    }
+    else {
+        Write-Verbose "Resource group $ResourceGroupName already exists"
+    }
+
+    # disable breaking change warning for output rendering to avoid confusion in runbook output
+    Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
+
+    # Build public IP address
+    $PublicIP = New-AzPublicIpAddress -Name "$($VMName)-ip" -ResourceGroupName $ResourceGroupName -Location $LocationName -AllocationMethod Static -Sku Standard -ErrorAction Stop
+    Write-Verbose "Public IP address created: $($PublicIP.Name)"
+
+    # NSG rule to allow RDP
+    $allowRDPParams = @{
+        Name                       = "RDP"
+        Description                = "Allow RDP from Internet"
+        Access                     = "Allow"
+        Protocol                   = "Tcp"
+        Direction                  = "Inbound"
+        Priority                   = 300
+        SourceAddressPrefix       = "Internet"
+        SourcePortRange           = "*"
+        DestinationAddressPrefix  = "*"
+        DestinationPortRange      = 3389
+    }
+    $RdpRule = New-AzNetworkSecurityRuleConfig @allowRDPParams
+
+    # Build Network Security Group
+    $NSG = New-AzNetworkSecurityGroup -Name "$($VMName)-nsg" -ResourceGroupName $ResourceGroupName -Location $LocationName -SecurityRules $RdpRule -ErrorAction Stop
+    Write-Verbose "Network Security Group created: $($NSG.Name)"    
+
+    # Build network interface (with public IP and NSG)
+    $NIC = New-AzNetworkInterface -Name $NICName -ResourceGroupName $ResourceGroupName -Location $LocationName -SubnetId $SubnetID -PublicIpAddressId $PublicIP.Id -NetworkSecurityGroupId $NSG.Id -ErrorAction Stop
 
     # Build VM credential
     $VMLocalAdminSecurePassword = ConvertTo-SecureString $VMLocalAdminPassword -AsPlainText -Force
     $VMCredential = New-Object System.Management.Automation.PSCredential ($VMLocalAdminUser, $VMLocalAdminSecurePassword)
 
     # Build VM configuration
-    $VirtualMachine = New-AzVMConfig -VMName $VMName -VMSize $VMSize
+    $VirtualMachine = New-AzVMConfig -VMName $VMName -VMSize $VMSize -securityType Standard
+    $VirtualMachine = Set-AzVMBootDiagnostic -VM $VirtualMachine -Disable
     $VirtualMachine = Set-AzVMOperatingSystem -VM $VirtualMachine -Windows -ComputerName $VMName -Credential $VMCredential -ProvisionVMAgent -EnableAutoUpdate
     $VirtualMachine = Add-AzVMNetworkInterface -VM $VirtualMachine -Id $NIC.Id
-    $VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine -PublisherName 'MicrosoftWindowsServer' -Offer 'WindowsServer' -Skus '2022-Datacenter' -Version latest
+    $VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine -PublisherName 'MicrosoftWindowsServer' -Offer 'WindowsServer' -Skus '2022-datacenter-g2' -Version latest
 
     # Create the virtual machine
-    New-AzVM -ResourceGroupName $ResourceGroupName -Location $LocationName -VM $VirtualMachine -ErrorAction Stop
+    New-AzVM -ResourceGroupName $ResourceGroupName -Location $LocationName -VM $VirtualMachine -ErrorAction Stop | Out-Null
     $VM = Get-AzVM -Name $VMName -ResourceGroupName $ResourceGroupName
 
     Write-Verbose "Virtual machine created successfully"
